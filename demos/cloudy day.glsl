@@ -6,16 +6,16 @@ uniform float u_time;
 
 out vec4 fragColor;
 
+const float DayLength = 10.0;
+const float LightDayLength = DayLength * 0.5;
+const float SunMoonRiseSetInterval = DayLength * 0.05;
+
 float inverseLerp(float v, float minValue, float maxValue) {
     return (v - minValue) / (maxValue - minValue);
 }
 
 float remap(float x, float y, float a, float b, float value) {
     return mix(a, b, inverseLerp(value, x, y));
-}
-
-float window(float center, float width, float x) {
-    return 1.0 - smoothstep(center - width, center + width, x);
 }
 
 float opUnion(float a, float b) {
@@ -39,11 +39,64 @@ float random(vec2 a) {
     return sin(t);
 }
 
-vec3 renderSun(vec2 p, vec3 bgColor) {
-    vec2 center = vec2(200.0, u_resolution.y * 0.8);
+vec3 renderSun(vec2 p, vec3 bgColor, float dayTime) {
+    vec2 dropDistance = vec2(0.0, 500.0);
+    vec2 centerBase = vec2(200.0, u_resolution.y * 0.8);
+
+    vec2 center;
+    float sunsetStart = LightDayLength - SunMoonRiseSetInterval;
+    if (sunsetStart <= dayTime) {
+        // sun set
+        float t = smoothstep(sunsetStart, LightDayLength, dayTime);
+        center = centerBase + mix(vec2(0.0), dropDistance, t);
+    } else {
+        // sun rise
+        float t = smoothstep(0.0, SunMoonRiseSetInterval, dayTime);
+        center = centerBase + mix(dropDistance, vec2(0.0), t);
+    }
+
     float radius = 100.0;
-    float t = smoothstep(0.0, -15.0, sdfCircle(p - center, radius));
-    return mix(bgColor, vec3(0.84, 0.62, 0.26), t);
+    float d = sdfCircle(p - center, radius);
+
+    vec3 sunColor = vec3(0.84, 0.62, 0.26);
+    vec3 haloColor = vec3(0.9, 0.85, 0.47);
+
+    // the larger the haloIntensity, the smaller the halo
+    float haloIntensity = 0.05;
+    float halo = exp(-max(d, 0.0) * haloIntensity);
+
+    vec3 color = bgColor + haloColor * halo;
+    color = mix(sunColor, color, step(0.0, d));
+    return color;
+}
+
+float sdfMoon(vec2 p) {
+    float bigCircle = sdfCircle(p, 100.0);
+    float smallCircle = sdfCircle(p + vec2(50.0, 0.0), 70.0);
+    return opSubtraction(bigCircle, smallCircle);
+}
+
+vec3 renderMoon(vec2 p, vec3 bgColor, float dayTime) {
+    vec2 dropDistance = vec2(0.0, 500.0);
+    vec2 centerBase = vec2(u_resolution.x - 200.0, u_resolution.y * 0.8);
+
+    vec2 center;
+    float moonriseEnd = LightDayLength + SunMoonRiseSetInterval;
+    if (moonriseEnd >= dayTime) {
+        // moon rise
+        float t = smoothstep(LightDayLength, moonriseEnd, dayTime);
+        center = centerBase + mix(dropDistance, vec2(0.0), t);
+    } else {
+        // moon set
+        float t = smoothstep(DayLength - SunMoonRiseSetInterval, DayLength, dayTime);
+        center = centerBase + mix(vec2(0.0), dropDistance, t);
+    }
+
+    float d = sdfMoon(p - center);
+
+    vec3 moonColor = vec3(1.0, 0.0, 0.0);
+
+    return mix(moonColor, bgColor, step(0.0, d));
 }
 
 vec3 background(vec2 uv) {
@@ -70,24 +123,24 @@ vec3 background(vec2 uv) {
             t
         );
 
-    float dayLength = 20.0;
-    float dayTime = mod(u_time, dayLength);
+    float dayTime = mod(u_time, DayLength);
     vec3 color;
 
-    if (dayTime < dayLength * 0.25) {
-        color = mix(morning, midday, smoothstep(0.0, dayLength * 0.25, dayTime));
-    } else if (dayTime < dayLength * 0.5) {
-        color = mix(midday, evening, smoothstep(dayLength * 0.25, dayLength * 0.5, dayTime));
-    } else if (dayTime < dayLength * 0.75) {
-        color = mix(evening, night, smoothstep(dayLength * 0.5, dayLength * 0.75, dayTime));
+    if (dayTime < DayLength * 0.25) {
+        color = mix(morning, midday, smoothstep(0.0, DayLength * 0.25, dayTime));
+    } else if (dayTime < LightDayLength) {
+        color = mix(midday, evening, smoothstep(DayLength * 0.25, LightDayLength, dayTime));
+    } else if (dayTime < DayLength * 0.75) {
+        color = mix(evening, night, smoothstep(LightDayLength, DayLength * 0.75, dayTime));
     } else {
-        color = mix(night, morning, smoothstep(dayLength * 0.75, dayLength, dayTime));
+        color = mix(night, morning, smoothstep(DayLength * 0.75, DayLength, dayTime));
     }
 
     vec2 pixelCoord = uv * u_resolution;
-    float sunVis = window(dayLength * 0.75, dayLength * 0.02, dayTime);
-    if (sunVis > 0.0) {
-        color = mix(color, renderSun(pixelCoord, color), sunVis);
+    if (dayTime <= LightDayLength) {
+        color = renderSun(pixelCoord, color, dayTime);
+    } else {
+        color = renderMoon(pixelCoord, color, dayTime);
     }
 
     return color;
